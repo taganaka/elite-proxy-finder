@@ -1,6 +1,8 @@
 #!/usr/bin/env python2
 
+from __future__ import print_function
 from gevent import monkey
+import json
 monkey.patch_all()
 
 import requests
@@ -35,12 +37,11 @@ class find_http_proxy():
         self.proxy_list.append(gatherproxy_list)
         # Flatten list of lists (1 master list containing 1 list of ips per proxy website)
         self.proxy_list = [ips for proxy_site in self.proxy_list for ips in proxy_site]
-        
-        print '[*] %d high anonymity proxies found' % len(self.proxy_list)
-        print '[*] Testing proxy speed against https://www.yahoo.com ...'
-        print ''
-        print '     Time elapsed         Proxy'
-        
+
+        print('[*] %d high anonymity proxies found' % len(self.proxy_list), file=sys.stderr)
+        print('[*] Testing proxy speed against https://www.yahoo.com ...', file=sys.stderr)
+        print('', file=sys.stderr)
+
         self.proxy_checker()
             
     def letushide_req(self):
@@ -61,7 +62,7 @@ class find_http_proxy():
                     break
                 letushide_ips.append(ips)
             except:
-                print '[!] Failed get reply from %s' % url
+                print('[!] Failed get reply from %s' % url,  file=sys.stderr)
                 break
 
         # Flatten list of lists (1 list containing 1 list of ips for each page)
@@ -119,7 +120,8 @@ class find_http_proxy():
         except:
             time = 'Error'
 
-        print '    %s | %s' % (time.ljust(14), proxy)
+        proxy_host, proxy_port = proxy.split(":")
+        print(json.dumps({"time":time.ljust(14), "proxy_host": proxy_host, "proxy_port": proxy_port }))
         self.limiter()
     
     def limiter(self):
