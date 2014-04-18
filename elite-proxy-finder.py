@@ -1,6 +1,7 @@
 #!/usr/bin/env python2
-
+from __future__ import print_function
 from gevent import monkey
+import json
 monkey.patch_all()
 
 import requests
@@ -35,12 +36,12 @@ class find_http_proxy():
         try:
             letushide_list = self.letushide_req()
         except Exception:
-            print '[!] Failed to get proxy list from letushide.com'
+            print('[!] Failed to get proxy list from letushide.com', file=sys.stderr)
 
         try:
             gatherproxy_list = self.gatherproxy_req()
         except Exception:
-            print '[!] Failed to get proxy list from gatherproxy.com'
+            print('[!] Failed to get proxy list from gatherproxy.com', file=sys.stderr)
 
         self.proxy_list.append(letushide_list)
         self.proxy_list.append(gatherproxy_list)
@@ -48,10 +49,8 @@ class find_http_proxy():
         self.proxy_list = [ips for proxy_site in self.proxy_list for ips in proxy_site]
         self.proxy_list = list(set(self.proxy_list)) # Remove duplicates
 
-        print '[*] %d unique high anonymity proxies found' % len(self.proxy_list)
-        print '[*] Testing proxy speeds ...'
-        print ''
-        print '      Proxy           | CC  |       Domain         | Time/Errors'
+        print('[*] %d unique high anonymity proxies found' % len(self.proxy_list),file=sys.stderr)
+        print('[*] Testing proxy speeds ...', file=sys.stderr)
 
         self.proxy_checker()
 
@@ -73,7 +72,7 @@ class find_http_proxy():
                     break
                 letushide_ips.append(ips)
             except:
-                print '[!] Failed get reply from %s' % url
+                print('[!] Failed get reply from %s' % url, file=sys.stderr)
                 break
 
         # Flatten list of lists (1 list containing 1 list of ips for each page)
@@ -132,7 +131,7 @@ class find_http_proxy():
         first_3_octets = '.'.join(proxy_split[:3])+'.'
 
         results = []
-        urls = ['http://www.ipchicken.com', 'http://whatsmyip.net/', 'https://www.astrill.com/what-is-my-ip-address.php']
+        urls = ['http://icanhazip.com']
         for url in urls:
             try:
                 check = requests.get(url,
@@ -176,41 +175,18 @@ class find_http_proxy():
     def printer(self, results, country_code):
         ''' Creates the output '''
         counter = 0
-        print '-------------------------------------------------------------------'
         for r in results:
             counter += 1
             time = r[0]
             proxy = r[1]
             url = r[2]
             #country_code = r[3]
-
-            # Only print the proxy once, on the second print job
-            if counter == 2:
-                print '%s | %s | %s | %s' % (proxy.ljust(21), country_code, url.ljust(20), time)
-                #print '%s | %s | %s | %s' % (proxy.ljust(21), '   ', url.ljust(20), time)
-            else:
-                print '%s | %s | %s | %s' % (' '.ljust(21), '   ', url.ljust(20), time)
+            proxy_host, proxy_port = proxy.split(":")
+            print(json.dumps({"time":time.ljust(14), "proxy_host": proxy_host, "proxy_port": proxy_port }))
+           
 
     def get_country_code(self, proxyip):
-        ''' Get the 3 letter country code of the proxy using geoiptool.com
-        Would use the geoip library, but it requires a local DB and what
-        is the point of that hassle other than marginal speed improvement '''
-        cc_line_found = False
-        cc = 'N/A'
-
-        r = requests.get('http://www.geoiptool.com/en/?IP=%s' % proxyip)
-        html = r.text
-        html_lines = html.splitlines()
-        for l in html_lines:
-            if cc_line_found == True:
-                cc = l.split('(', 1)[1].split(')', 1)[0]
-                break
-            if 'country code:' in l.lower():
-                cc_line_found = True
-
-        #if cc == 'N/A':
-        #    print proxyip, html
-        return cc
+        return 'N/A'
 
     def check_ip_on_page(self, time, html_lines, first_3_octets):
         ''' Check for the IP on the page, for a captcha, and for 'access denied' mesg '''
