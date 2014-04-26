@@ -1,5 +1,4 @@
 #!/usr/bin/env python2
-
 from __future__ import print_function
 from gevent import monkey
 import json
@@ -12,38 +11,49 @@ import sys, re, time, os, argparse
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-s', '--show', help='Show this number of results. Example: -s 5 will show the 5 fastest proxies then stop')
+    parser.add_argument('-s', '--show', help='Show this number of results. Example: "-s 5" will show the 5 fastest proxies then stop')
+    parser.add_argument('-a', '--all', help='Show all proxy results including the ones that failed 1 of the 3 tests', action='store_true')
     return parser.parse_args()
-	
+
 class find_http_proxy():
     ''' Will only gather L1 (elite anonymity) proxies
     which should not give out your IP or advertise
     that you are using a proxy at all '''
-    
+
     def __init__(self, args):
         self.checked_proxies = []
         self.proxy_list = []
         self.headers = {'User-Agent':'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/33.0.1750.154 Safari/537.36'}
-        self.show = args.show
-        self.proxy_counter = 0
-            
+        self.show_num = args.show
+        self.show_all = args.all
+        self.errors = []
+        self.print_counter = 0
+
     def run(self):
-        ''' Gets raw high anonymity (L1) proxy data then calls make_proxy_list() 
+        ''' Gets raw high anonymity (L1) proxy data then calls make_proxy_list()
         Currently parses data from gatherproxy.com and letushide.com '''
-        letushide_list = self.letushide_req()
-        gatherproxy_list = self.gatherproxy_req()
-        
+
+        try:
+            letushide_list = self.letushide_req()
+        except Exception:
+            print('[!] Failed to get proxy list from letushide.com', file=sys.stderr)
+
+        try:
+            gatherproxy_list = self.gatherproxy_req()
+        except Exception:
+            print('[!] Failed to get proxy list from gatherproxy.com', file=sys.stderr)
+
         self.proxy_list.append(letushide_list)
         self.proxy_list.append(gatherproxy_list)
         # Flatten list of lists (1 master list containing 1 list of ips per proxy website)
         self.proxy_list = [ips for proxy_site in self.proxy_list for ips in proxy_site]
+        self.proxy_list = list(set(self.proxy_list)) # Remove duplicates
 
-        print('[*] %d high anonymity proxies found' % len(self.proxy_list), file=sys.stderr)
-        print('[*] Testing proxy speed against https://www.yahoo.com ...', file=sys.stderr)
-        print('', file=sys.stderr)
+        print('[*] %d unique high anonymity proxies found' % len(self.proxy_list),file=sys.stderr)
+        print('[*] Testing proxy speeds ...', file=sys.stderr)
 
         self.proxy_checker()
-            
+
     def letushide_req(self):
         ''' Make the request to the proxy site and create a master list from that site '''
         letushide_ips = []
@@ -53,7 +63,7 @@ class find_http_proxy():
                 r = requests.get(url, headers=self.headers)
                 html = r.text
                 ips = self.parse_letushide(html)
-            
+
                 # Check html for a link to the next page
                 if '/filter/http,hap,all/%s/list_of_free_HTTP_High_Anonymity_proxy_servers' % str(i+1) in html:
                     pass
@@ -62,13 +72,13 @@ class find_http_proxy():
                     break
                 letushide_ips.append(ips)
             except:
-                print('[!] Failed get reply from %s' % url,  file=sys.stderr)
+                print('[!] Failed get reply from %s' % url, file=sys.stderr)
                 break
 
         # Flatten list of lists (1 list containing 1 list of ips for each page)
         letushide_list = [item for sublist in letushide_ips for item in sublist]
         return letushide_list
-            
+
     def parse_letushide(self, html):
         ''' Parse out list of IP:port strings from the html '''
         # \d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}  -  matches IP addresses
@@ -87,7 +97,7 @@ class find_http_proxy():
         lines = r.text.splitlines()
         gatherproxy_list = self.parse_gp(lines)
         return gatherproxy_list
-            
+
     def parse_gp(self, lines):
         ''' Parse the raw scraped data '''
         gatherproxy_list = []
@@ -98,38 +108,138 @@ class find_http_proxy():
                 l = l.replace('null', 'None')
                 l = l.strip()
                 l = ast.literal_eval(l)
-                            
+
                 proxy = '%s:%s' % (l["PROXY_IP"], l["PROXY_PORT"])
                 gatherproxy_list.append(proxy)
                 #ctry = l["PROXY_COUNTRY"]
         return gatherproxy_list
-            
+
     def proxy_checker(self):
         ''' Concurrency stuff here '''
         jobs = [gevent.spawn(self.proxy_checker_req, proxy) for proxy in self.proxy_list]
-        gevent.joinall(jobs)
+        try:
+            gevent.joinall(jobs)
+        except KeyboardInterrupt:
+            sys.exit('[-] Ctrl-C caught, exiting')
 
     def proxy_checker_req(self, proxy):
-        ''' See how long each proxy takes to open https://www.yahoo.com '''
-        try:
-            check = requests.get('https://www.yahoo.com',
-                                headers = self.headers,
-                                proxies = {'http':'http://'+proxy},
-                                timeout=10)
-            time = str(check.elapsed)
-        except:
-            time = 'Error'
+        ''' See how long each proxy takes to open each URL '''
+        proxyip = str(proxy.split(':', 1)[0])
 
-        proxy_host, proxy_port = proxy.split(":")
-        print(json.dumps({"time":time.ljust(14), "proxy_host": proxy_host, "proxy_port": proxy_port }))
-        self.limiter()
-    
+        # A lot of proxy checker sites give a different final octet for some reason
+        proxy_split = proxyip.split('.')
+        first_3_octets = '.'.join(proxy_split[:3])+'.'
+
+        results = []
+        urls = ['http://icanhazip.com']
+        for url in urls:
+            try:
+                check = requests.get(url,
+                                    headers = self.headers,
+                                    proxies = {'http':'http://'+proxy,
+                                               'https':'http://'+proxy},
+                                    timeout = 15)
+
+                time = str(check.elapsed)
+                html = check.text
+                html_lines = html.splitlines()
+                time = self.check_ip_on_page(time, html_lines, first_3_octets)
+                url = self.url_shortener(url)
+
+                results.append((time, proxy, url))
+
+            except Exception as e:
+                #raise
+                time = self.error_handler(e)
+                url = self.url_shortener(url)
+                results.append((time, proxy, url))
+
+        self.print_handler(results, proxyip)
+
+    def print_handler(self, results, proxyip):
+        if self.show_all:
+            country_code = self.get_country_code(proxyip)
+            self.printer(results, country_code)
+            self.print_counter += 1
+        else:
+            passed_all = self.passed_all_tests(results)
+            if passed_all:
+                country_code = self.get_country_code(proxyip)
+                self.printer(results, country_code)
+                self.print_counter += 1
+
+        if self.show_num:
+            self.limiter()
+
+
+    def printer(self, results, country_code):
+        ''' Creates the output '''
+        counter = 0
+        for r in results:
+            counter += 1
+            time = r[0]
+            proxy = r[1]
+            url = r[2]
+            #country_code = r[3]
+            proxy_host, proxy_port = proxy.split(":")
+            print(json.dumps({"time":time.ljust(14), "proxy_host": proxy_host, "proxy_port": proxy_port }))
+           
+
+    def get_country_code(self, proxyip):
+        return 'N/A'
+
+    def check_ip_on_page(self, time, html_lines, first_3_octets):
+        ''' Check for the IP on the page, for a captcha, and for 'access denied' mesg '''
+        ip_found = False
+
+        for l in html_lines:
+            if first_3_octets in l:
+                ip_found = True
+            if 'captcha' in l.lower():
+                time = time + ' - Captcha detected'
+            if 'access denied' in l.lower():
+                time = time + ' - Access denied'
+                break
+
+        if ip_found == False:
+            time = 'Err: Page loaded but proxy failed'
+        return time
+
+    def error_handler(self, e):
+        if 'Cannot connect' in str(e):
+            time = 'Err: Cannot connect to proxy'
+        elif 'timed out' in str(e).lower():
+            time = 'Err: Timed out'
+        elif 'retries exceeded' in str(e):
+            time = 'Err: Max retries exceeded'
+        elif 'Connection reset by peer' in str(e):
+            time = 'Err: Connection reset by peer'
+        elif 'readline() takes exactly 1 argument (2 given)' in str(e):
+            time = 'Err: SSL error'
+        else:
+            time = 'Err: '+str(e)
+        return time
+
+    def url_shortener(self, url):
+        if 'ipchicken' in url:
+            url = 'http://ipchicken.com'
+        elif 'whatsmyip' in url:
+            url = 'http://whatsmyip.net'
+        elif 'astrill' in url:
+            url = 'https://astrill.com'
+        return url
+
+    def passed_all_tests(self, results):
+        for r in results:
+            time = r[0]
+            if 'Err:' in time:
+                return False
+        return True
+
     def limiter(self):
-        ''' Kill the script if user supplied limit (-s argument) is reached '''
-        if self.show:
-            self.proxy_counter += 1
-            if self.proxy_counter == int(self.show):
-                sys.exit()
+        ''' Kill the script if user supplied limit of successful proxy attempts (-s argument) is reached '''
+        if self.print_counter >= int(self.show_num):
+            sys.exit()
 
 P = find_http_proxy(parse_args())
 P.run()
